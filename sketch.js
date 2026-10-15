@@ -1,8 +1,11 @@
 let myFont;
 let modo = 'sellos'; // "sellos" | "escribir"
 
-const BARRA = 56; // alto de la barra superior
-const MARGEN = 40;
+// ¿pantalla táctil (móvil/tablet)? Lo usamos para adaptar teclado y tamaños
+const esMovil = window.matchMedia('(pointer: coarse)').matches;
+
+let BARRA = 56; // alto de la barra superior (se mide: en móvil ocupa más líneas)
+const MARGEN = esMovil ? 20 : 40;
 
 // ---------- Modo sellos ----------
 const CARACTERES = Array.from(
@@ -10,7 +13,7 @@ const CARACTERES = Array.from(
     'abcdefghijklmnñopqrstuvwxyz' +
     'ÁÉÍÓÚÜáéíóúü' +
     '0123456789' +
-    '.,;:!?¡¿"\'“”()-–—…«»@#&*+=<>♥',
+    `.,;:!?¡¿"'“”()-–—…«»@#&*+=<>♥`,
 );
 let sellos = [];
 
@@ -22,15 +25,24 @@ let altoTotal = 0;
 let scrollY = 0;
 let layoutSucio = true;
 
+// ---------- Teclado del móvil ----------
+let entrada; // textarea invisible que hace aparecer el teclado
+let ultimoTexto = ''; // lo que tenía el textarea la última vez (para detectar cambios)
+let toqueInicio = null;
+
 // ---------- Interfaz ----------
-let btnSellos, btnEscribir, btnGuardar, btnBorrar, selColor, selTam, etiquetaTam, grupoTam;
+let barraEl, btnSellos, btnEscribir, btnTeclado, btnGuardar, btnBorrar;
+let selColor, selTam, etiquetaTam, grupoTam;
 let guardando = false;
 
 const CSS = `
+html, body { margin: 0; padding: 0; overflow: hidden; background: #f5f5f5; overscroll-behavior: none; }
+canvas { display: block; touch-action: none; }
+
 #barra {
-  position: fixed; top: 0; left: 0; right: 0; height: ${BARRA}px;
-  box-sizing: border-box; display: flex; align-items: center; gap: 22px;
-  padding: 0 16px; background: #fff; border-bottom: 1px solid #ddd;
+  position: fixed; top: 0; left: 0; right: 0; min-height: 56px;
+  box-sizing: border-box; display: flex; flex-wrap: wrap; align-items: center;
+  gap: 8px 22px; padding: 8px 16px; background: #fff; border-bottom: 1px solid #ddd;
   font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   font-size: 13px; color: #0a0a0a; z-index: 10;
 }
@@ -51,12 +63,29 @@ const CSS = `
 #barra input[type=range] { width: 120px; accent-color: #0a0a0a; cursor: pointer; }
 #barra .grupo { display: flex; align-items: center; gap: 10px; }
 #barra #guardar { margin-left: auto; }
+
+/* Pantallas táctiles: controles más grandes y fáciles de pulsar */
+@media (pointer: coarse) {
+  #barra { font-size: 15px; gap: 6px 18px; padding: 6px 12px; }
+  #barra button { padding: 10px 2px; }
+  #barra input[type=color] { width: 48px; height: 40px; }
+  #barra input[type=range] { width: 150px; }
+}
+
+/* textarea invisible: solo sirve para que el móvil muestre el teclado.
+   font-size 16px evita que iOS haga zoom al enfocarlo */
+#entrada {
+  position: fixed; top: 0; left: 0; width: 1px; height: 1px;
+  opacity: 0; border: 0; padding: 0; resize: none;
+  font-size: 16px; pointer-events: none;
+}
 `;
 
 async function setup() {
   createCanvas(windowWidth, windowHeight);
   crearInterfaz();
-  myFont = await loadFont('fonts/en-abierto.ttf');
+  medirBarra();
+  myFont = await loadFont('fonts/en-abierto.ttf'); // ruta de tu archivo de fuente
   textFont(myFont);
 }
 
@@ -186,7 +215,9 @@ function editado() {
   if (caret.y - scrollY < 0) scrollY = caret.y;
 }
 
+// Teclado físico (ordenador)
 function keyPressed(event) {
+  if (esMovil) return; // en móvil escribe el textarea invisible
   if (modo !== 'escribir' || !myFont) return;
   if (event.ctrlKey || event.metaKey) return;
 
@@ -208,10 +239,19 @@ function keyPressed(event) {
   }
 }
 
+// Scroll con la rueda (ordenador)
 function mouseWheel(event) {
   if (modo !== 'escribir') return;
   const maxScroll = max(0, altoTotal - (height - BARRA));
   scrollY = constrain(scrollY + event.delta, 0, maxScroll);
+  return false;
+}
+
+// Scroll arrastrando el dedo (móvil)
+function mouseDragged() {
+  if (modo !== 'escribir' || mouseY < BARRA) return;
+  const maxScroll = max(0, altoTotal - (height - BARRA));
+  scrollY = constrain(scrollY - (mouseY - pmouseY), 0, maxScroll);
   return false;
 }
 
@@ -222,25 +262,76 @@ function tamActual() {
   return selTam.value();
 }
 
+// =============== TECLADO DEL MÓVIL ===============
+function crearEntradaMovil() {
+  entrada = document.createElement('textarea');
+  entrada.id = 'entrada';
+  entrada.setAttribute('autocomplete', 'off');
+  entrada.setAttribute('autocorrect', 'off');
+  entrada.setAttribute('autocapitalize', 'off');
+  entrada.setAttribute('spellcheck', 'false');
+  document.body.appendChild(entrada);
+
+  // Cada vez que el teclado cambia el texto, comparamos con lo anterior
+  // y aplicamos la diferencia a nuestro documento (borrar y/o añadir letras)
+  entrada.addEventListener('input', () => {
+    if (modo !== 'escribir' || !myFont) return;
+    const antes = Array.from(ultimoTexto);
+    const ahora = Array.from(entrada.value);
+
+    let i = 0;
+    while (i < antes.length && i < ahora.length && antes[i] === ahora[i]) i++;
+
+    for (let k = i; k < antes.length; k++) doc.pop();
+    for (let k = i; k < ahora.length; k++) doc.push(nuevo(ahora[k]));
+
+    ultimoTexto = entrada.value;
+    editado();
+  });
+
+  // Tocar el lienzo (sin arrastrar) en modo escribir abre el teclado
+  const lienzo = document.querySelector('canvas');
+  lienzo.addEventListener('pointerdown', (e) => {
+    toqueInicio = { x: e.clientX, y: e.clientY };
+  });
+  lienzo.addEventListener('pointerup', (e) => {
+    if (!esMovil || modo !== 'escribir' || !toqueInicio) return;
+    const movido = Math.hypot(e.clientX - toqueInicio.x, e.clientY - toqueInicio.y);
+    if (movido < 10) enfocarTeclado();
+  });
+}
+
+function enfocarTeclado() {
+  if (!entrada) return;
+  if (document.activeElement !== entrada) {
+    // el textarea refleja el texto actual, para que "borrar" del teclado funcione
+    entrada.value = doc.map((c) => c.ch).join('');
+    ultimoTexto = entrada.value;
+  }
+  entrada.focus({ preventScroll: true });
+}
+
 // =============== INTERFAZ ===============
 function crearInterfaz() {
   const estilo = document.createElement('style');
   estilo.textContent = CSS;
   document.head.appendChild(estilo);
 
-  const barra = createDiv();
-  barra.id('barra');
+  barraEl = createDiv();
+  barraEl.id('barra');
 
-  btnSellos = createButton('sellos').parent(barra);
-  btnEscribir = createButton('escribir').parent(barra);
-  selColor = createColorPicker('#0a0a0a').parent(barra);
+  btnSellos = createButton('sellos').parent(barraEl);
+  btnEscribir = createButton('escribir').parent(barraEl);
+  btnTeclado = createButton('teclado').parent(barraEl);
+  selColor = createColorPicker('#0a0a0a').parent(barraEl);
 
-  grupoTam = createDiv().class('grupo').parent(barra);
-  selTam = createSlider(16, 200, 60).parent(grupoTam);
-  etiquetaTam = createSpan('tamaño 60').parent(grupoTam);
+  const tamInicial = esMovil ? 40 : 60;
+  grupoTam = createDiv().class('grupo').parent(barraEl);
+  selTam = createSlider(16, 200, tamInicial).parent(grupoTam);
+  etiquetaTam = createSpan('tamaño ' + tamInicial).parent(grupoTam);
 
-  btnGuardar = createButton('guardar imagen').id('guardar').parent(barra);
-  btnBorrar = createButton('borrar').parent(barra);
+  btnGuardar = createButton('guardar imagen').id('guardar').parent(barraEl);
+  btnBorrar = createButton('borrar').parent(barraEl);
 
   btnSellos.mousePressed(() => cambiarModo('sellos'));
   btnEscribir.mousePressed(() => cambiarModo('escribir'));
@@ -249,6 +340,9 @@ function crearInterfaz() {
     soltarFoco();
   });
   btnBorrar.mousePressed(borrar);
+
+  // "click" (y no mousePressed) para que el foco acabe en el textarea y salga el teclado
+  btnTeclado.elt.addEventListener('click', enfocarTeclado);
 
   selTam.input(() => {
     etiquetaTam.html('tamaño ' + selTam.value());
@@ -259,7 +353,15 @@ function crearInterfaz() {
   selColor.elt.addEventListener('change', soltarFoco);
   selTam.elt.addEventListener('change', soltarFoco);
 
+  crearEntradaMovil();
   actualizarInterfaz();
+}
+
+// Mide el alto real de la barra (en móvil los controles saltan de línea)
+function medirBarra() {
+  if (!barraEl) return;
+  BARRA = barraEl.elt.offsetHeight;
+  layoutSucio = true;
 }
 
 function cambiarModo(m) {
@@ -267,6 +369,7 @@ function cambiarModo(m) {
   layoutSucio = true;
   soltarFoco();
   actualizarInterfaz();
+  medirBarra();
 }
 
 function actualizarInterfaz() {
@@ -274,7 +377,8 @@ function actualizarInterfaz() {
   btnSellos.removeClass('activa');
   btnEscribir.removeClass('activa');
   (esc ? btnEscribir : btnSellos).addClass('activa');
-  grupoTam.style('visibility', esc ? 'visible' : 'hidden');
+  grupoTam.style('display', esc ? 'flex' : 'none');
+  btnTeclado.style('display', esMovil && esc ? 'inline-block' : 'none');
 }
 
 function guardarImagen() {
@@ -290,6 +394,10 @@ function borrar() {
   } else {
     doc = [];
     scrollY = 0;
+    if (entrada) {
+      entrada.value = '';
+      ultimoTexto = '';
+    }
     editado();
   }
   soltarFoco();
@@ -301,5 +409,6 @@ function soltarFoco() {
 
 function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
-  layoutSucio = true;
+  medirBarra();
+  if (myFont) editado(); // reajusta texto y scroll al nuevo tamaño
 }
