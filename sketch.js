@@ -31,7 +31,7 @@ let ultimoTexto = ''; // lo que tenía el textarea la última vez (para detectar
 let toqueInicio = null;
 
 // ---------- Interfaz ----------
-let barraEl, btnSellos, btnEscribir, btnTeclado, btnGuardar, btnBorrar;
+let barraEl, btnSellos, btnEscribir, btnGuardar, btnBorrar;
 let selColor, selTam, etiquetaTam, grupoTam;
 let guardando = false;
 
@@ -322,7 +322,6 @@ function crearInterfaz() {
 
   btnSellos = createButton('sellos').parent(barraEl);
   btnEscribir = createButton('escribir').parent(barraEl);
-  btnTeclado = createButton('teclado').parent(barraEl);
   selColor = createColorPicker('#0a0a0a').parent(barraEl);
 
   const tamInicial = esMovil ? 40 : 60;
@@ -340,9 +339,6 @@ function crearInterfaz() {
     soltarFoco();
   });
   btnBorrar.mousePressed(borrar);
-
-  // "click" (y no mousePressed) para que el foco acabe en el textarea y salga el teclado
-  btnTeclado.elt.addEventListener('click', enfocarTeclado);
 
   selTam.input(() => {
     etiquetaTam.html('tamaño ' + selTam.value());
@@ -378,7 +374,6 @@ function actualizarInterfaz() {
   btnEscribir.removeClass('activa');
   (esc ? btnEscribir : btnSellos).addClass('activa');
   grupoTam.style('display', esc ? 'flex' : 'none');
-  btnTeclado.style('display', esMovil && esc ? 'inline-block' : 'none');
 }
 
 function guardarImagen() {
