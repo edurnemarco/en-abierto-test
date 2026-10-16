@@ -105,12 +105,18 @@ canvas { display: block; touch-action: none; }
 #panel p { margin: 0; }
 #panel .boton {
   display: block; box-sizing: border-box; width: 100%; padding: 12px;
-  background: #0a0a0a; color: #fff; border: none; border-radius: 0;
+  background: #ff5a36; color: #0a0a0a; border: 1px solid #0a0a0a; border-radius: 0;
   font: inherit; text-align: center; text-decoration: none; cursor: pointer;
+}
+#panel .boton:focus-visible { background: #0a0a0a; color: #fff; }
+
+@media (hover: hover) {
+  #panel .boton:hover { background: #0a0a0a; color: #fff; }
+  #panel .enlace:hover { border-bottom-color: transparent; }
 }
 #panel input[type=email] {
   box-sizing: border-box; width: 100%; padding: 10px;
-  border: 2px solid #0a0a0a; border-radius: 0; background: #fff;
+  border: 1px solid #0a0a0a; border-radius: 0; background: #fff;
   font-family: inherit; font-size: 16px; /* 16px evita el zoom automático en iOS */
 }
 #panel form { display: flex; flex-direction: column; gap: 8px; }
@@ -473,7 +479,7 @@ function crearPanel() {
     </form>
     <button type="button" id="panel-copiar" class="enlace">copiar enlace</button>
     <p id="panel-msg"></p>
-    <button type="button" id="panel-jugar" class="enlace">probar la tipografía →</button>
+   <button type="button" id="panel-jugar" class="enlace">probar la tipografía →</button>
   `;
   document.body.appendChild(panel);
 
@@ -484,12 +490,13 @@ function crearPanel() {
   document.getElementById('panel-form').addEventListener('submit', (e) => {
     e.preventDefault();
     const email = document.getElementById('panel-email').value.trim();
-    const asunto = 'Enlace para descargar la tipografía';
+    const asunto = 'descarga - tipografía en abierto';
     const cuerpo =
       'Descarga la tipografía desde el ordenador:\n' +
       urlDescarga() +
       '\n\nY pruébala aquí:\n' +
-      location.href.split('#')[0];
+      location.href.split('#')[0] +
+      '\n\núsala donde quieras y compártela con quien quieras <3\n';
     window.location.href =
       'mailto:' + email + '?subject=' + encodeURIComponent(asunto) + '&body=' + encodeURIComponent(cuerpo);
   });
