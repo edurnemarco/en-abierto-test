@@ -8,3 +8,7 @@ body {
 canvas {
   display: block;
 }
+
+#texto .l {
+  cursor: pointer;
+}

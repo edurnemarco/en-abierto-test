@@ -1,11 +1,12 @@
 let myFont;
 let modo = 'sellos'; // "sellos" | "escribir"
 
-// ¿pantalla táctil (móvil/tablet)? Lo usamos para adaptar teclado y tamaños
+// ¿pantalla táctil (móvil/tablet)?
 const esMovil = window.matchMedia('(pointer: coarse)').matches;
 
 let BARRA = 56; // alto de la barra superior (se mide: en móvil ocupa más líneas)
-const MARGEN = esMovil ? 20 : 40;
+
+const FUENTE = 'fonts/en-abierto.otf'; // ruta de tu archivo de fuente
 
 // ---------- Modo sellos ----------
 const CARACTERES = Array.from(
@@ -13,7 +14,7 @@ const CARACTERES = Array.from(
     'abcdefghijklmnñopqrstuvwxyz' +
     'ÁÉÍÓÚÜáéíóúü' +
     '0123456789' +
-    `.,;:!?¡¿"'“”()-–—…«»@#&*+=<>♥`,
+    `.,;:!?¡¿"'“”()-–—…«»@*<>♥`,
 );
 let sellos = [];
 
@@ -21,25 +22,27 @@ let sellos = [];
 const ARCHIVO_FUENTE = 'descargas/en-abierto.zip'; // ruta del .zip, relativa al index.html
 let panel, btnDescargar;
 
-// ---------- Modo escribir ----------
-let doc = []; // cada elemento: { ch, size, col }
-let glifos = []; // posiciones ya calculadas
-let caret = { x: 0, y: 0, h: 0 };
-let altoTotal = 0;
-let scrollY = 0;
-let layoutSucio = true;
+// ---------- Modo escribir (capa HTML) ----------
+let doc = []; // cada letra: { ch, v, size, col }  (v: 0 = base, 1 = cv01, 2 = cv02)
+let pos = 0; // dónde está el cursor: entre doc[pos - 1] y doc[pos]
+let hoja, texto, cursorEl;
+
+// Letras que tienen diseños alternativos. ACTUALÍZALO cuando añadas variantes.
+const TRES_DISENOS = 'GHk'; // base + cv01 + cv02
+const DOS_DISENOS = 'AÁÂÄÀEÉÊËÈFIÍÎÏÌJKLMNRSTXYÝŶŸỲcmñoóôöòwẃŵẅẁyýŷÿỳ♥áéíóúÁÉÍÓÚ';
 
 // ---------- Teclado del móvil ----------
 let entrada; // textarea invisible que hace aparecer el teclado
 let ultimoTexto = ''; // lo que tenía el textarea la última vez (para detectar cambios)
-let toqueInicio = null;
 
 // ---------- Interfaz ----------
 let barraEl, btnSellos, btnEscribir, btnGuardar, btnBorrar;
 let selColor, selTam, etiquetaTam, grupoTam;
-let guardando = false;
+let guardando = false; // solo se usa para guardar los sellos
 
 const CSS = `
+@font-face { font-family: "EnAbierto"; src: url("${FUENTE}"); }
+
 html, body { margin: 0; padding: 0; overflow: hidden; background: #f5f5f5; overscroll-behavior: none; }
 canvas { display: block; touch-action: none; }
 
@@ -84,6 +87,29 @@ canvas { display: block; touch-action: none; }
   #barra .grupo, #barra #guardar, #barra #borrar { order: 2; }
 }
 
+/* Hoja de escribir: capa HTML con scroll propio, encima del canvas y debajo de la barra */
+#hoja {
+  position: fixed; left: 0; right: 0; bottom: 0; top: 56px; /* top se ajusta por JS */
+  display: none; overflow-y: auto; overscroll-behavior: contain;
+  background: #f5f5f5; z-index: 5; touch-action: pan-y; cursor: text;
+}
+#hoja::after { content: ""; display: block; height: 40vh; } /* espacio para seguir escribiendo abajo */
+#texto {
+  position: relative; box-sizing: border-box; padding: 40px;
+  font-family: "EnAbierto", sans-serif;
+  font-size: 0; /* el tamaño real lo pone cada letra */
+  line-height: 1.25; white-space: pre-wrap; overflow-wrap: anywhere;
+  background: #f5f5f5;
+  -webkit-user-select: none; user-select: none;
+}
+@media (pointer: coarse) { #texto { padding: 20px; } }
+#texto .cursor {
+  position: absolute; width: 2px; pointer-events: none;
+  animation: parpadeo 1s steps(1) infinite;
+}
+@keyframes parpadeo { 50% { opacity: 0; } }
+#texto.capturando .cursor { visibility: hidden; }
+
 /* textarea invisible: solo sirve para que el móvil muestre el teclado.
    font-size 16px evita que iOS haga zoom al enfocarlo */
 #entrada {
@@ -91,7 +117,8 @@ canvas { display: block; touch-action: none; }
   opacity: 0; border: 0; padding: 0; resize: none;
   font-size: 16px; pointer-events: none;
 }
-  /* Cuadrado flotante de descarga */
+
+/* Cuadrado flotante de descarga */
 #panel {
   position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
   width: min(86vw, 340px); max-height: 90vh; overflow: auto;
@@ -135,18 +162,17 @@ async function setup() {
   createCanvas(windowWidth, windowHeight);
   crearInterfaz();
   medirBarra();
-  myFont = await loadFont('fonts/en-abierto.ttf'); // ruta de tu archivo de fuente
+  myFont = await loadFont(FUENTE); // la fuente para el canvas (sellos)
   textFont(myFont);
 }
 
 function draw() {
+  if (modo !== 'sellos') return; // en "escribir" la hoja HTML tapa el lienzo
   background(245);
   noStroke();
   if (!myFont) return;
 
-  if (modo === 'sellos') dibujarSellos();
-  else dibujarTexto();
-
+  dibujarSellos();
   if (guardando) guardarImagen();
 }
 
@@ -177,146 +203,184 @@ function mousePressed(event) {
   });
 }
 
-// =============== ESCRIBIR ===============
-function dibujarTexto() {
-  if (layoutSucio) calcularLayout();
-  textAlign(LEFT, BASELINE);
-
-  push();
-  translate(0, BARRA - scrollY);
-
-  for (let g of glifos) {
-    const yPantalla = g.y - scrollY + BARRA;
-    if (yPantalla < BARRA - g.size * 1.5 || yPantalla > height + g.size) continue;
-    fill(g.col);
-    textSize(g.size);
-    text(g.ch, g.x, g.y);
-  }
-
-  if (!guardando && floor(frameCount / 30) % 2 === 0) {
-    stroke(selColor.value());
-    strokeWeight(2);
-    line(caret.x, caret.y, caret.x, caret.y + caret.h);
-  }
-  pop();
-}
-
-function calcularLayout() {
-  layoutSucio = false;
-  glifos = [];
-  const anchoMax = width - MARGEN * 2;
-  let lineas = [];
-  let linea = [];
-  let ancho = 0;
-
-  for (let c of doc) {
-    if (c.ch === '\n') {
-      lineas.push(linea);
-      linea = [];
-      ancho = 0;
-      continue;
-    }
-    textSize(c.size);
-    const w = textWidth(c.ch);
-
-    if (c.ch !== ' ' && ancho + w > anchoMax && linea.length > 0) {
-      let corte = -1;
-      for (let k = linea.length - 1; k >= 0; k--) {
-        if (linea[k].ch === ' ') {
-          corte = k;
-          break;
-        }
-      }
-      if (corte >= 0) {
-        const resto = linea.splice(corte + 1);
-        lineas.push(linea);
-        linea = resto;
-      } else {
-        lineas.push(linea);
-        linea = [];
-      }
-      ancho = linea.reduce((a, g) => a + g.w, 0);
-    }
-    linea.push({ ch: c.ch, size: c.size, col: c.col, w });
-    ancho += w;
-  }
-  lineas.push(linea);
-
-  let y = MARGEN;
-  lineas.forEach((l, i) => {
-    const maxTam = l.length ? Math.max(...l.map((g) => g.size)) : tamActual();
-    const alto = maxTam * 1.25;
-    const base = y + maxTam;
-    let x = MARGEN;
-    for (let g of l) {
-      glifos.push({ ch: g.ch, x, y: base, size: g.size, col: g.col });
-      x += g.w;
-    }
-    if (i === lineas.length - 1) caret = { x, y, h: alto };
-    y += alto;
-  });
-  altoTotal = y + MARGEN;
-}
-
-function editado() {
-  calcularLayout();
-  const vista = height - BARRA;
-  const abajo = caret.y + caret.h + MARGEN / 2;
-  if (abajo - scrollY > vista) scrollY = abajo - vista;
-  if (caret.y - scrollY < 0) scrollY = caret.y;
-}
-
-// Teclado físico (ordenador)
-function keyPressed(event) {
-  if (esMovil) return; // en móvil escribe el textarea invisible
-  if (document.activeElement && document.activeElement.closest('#panel')) return; // escribiendo en el email
-  if (modo !== 'escribir' || !myFont) return;
-  if (event.ctrlKey || event.metaKey) return;
-
-  const k = event.key;
-  if (k === 'Backspace') {
-    doc.pop();
-    editado();
-    return false;
-  }
-  if (k === 'Enter') {
-    doc.push(nuevo('\n'));
-    editado();
-    return false;
-  }
-  if (k.length === 1) {
-    doc.push(nuevo(k));
-    editado();
-    return false;
-  }
-}
-
-// Scroll con la rueda (ordenador)
-function mouseWheel(event) {
-  if (modo !== 'escribir') return;
-  const maxScroll = max(0, altoTotal - (height - BARRA));
-  scrollY = constrain(scrollY + event.delta, 0, maxScroll);
-  return false;
-}
-
-// Scroll arrastrando el dedo (móvil)
-function mouseDragged(event) {
-  if (event && event.target && event.target.closest && event.target.closest('#panel')) return;
-  if (modo !== 'escribir' || mouseY < BARRA) return;
-  const maxScroll = max(0, altoTotal - (height - BARRA));
-  scrollY = constrain(scrollY - (mouseY - pmouseY), 0, maxScroll);
-  return false;
-}
-
-function nuevo(ch) {
-  return { ch, size: tamActual(), col: selColor.value() };
-}
+// =============== ESCRIBIR (hoja HTML) ===============
 function tamActual() {
   return selTam.value();
 }
 
-// =============== TECLADO DEL MÓVIL ===============
-function crearEntradaMovil() {
+// cuántos diseños tiene una letra (1 = ninguna variante)
+function numDisenos(ch) {
+  if (TRES_DISENOS.includes(ch)) return 3;
+  if (DOS_DISENOS.includes(ch)) return 2;
+  return 1;
+}
+
+// Al escribir una letra, toma el diseño siguiente al de la última vez que salió
+// esa misma letra ANTES del cursor. Se guarda en la letra, así que no cambia después.
+function disenoInicial(ch) {
+  const n = numDisenos(ch);
+  if (n < 2) return 0;
+  for (let i = pos - 1; i >= 0; i--) {
+    if (doc[i].ch === ch) return (doc[i].v + 1) % n;
+  }
+  return 0;
+}
+
+// inserta una letra en la posición del cursor
+function anadir(ch) {
+  // "<" seguido de "3" se convierte en corazón (la hoja desactiva calt, así que lo hacemos aquí)
+  if (ch === '3' && pos > 0 && doc[pos - 1].ch === '<') {
+    doc.splice(pos - 1, 1);
+    pos--;
+    ch = '♥';
+  }
+  doc.splice(pos, 0, { ch, v: disenoInicial(ch), size: tamActual(), col: selColor.value() });
+  pos++;
+}
+
+// pasa la letra i a su siguiente diseño (base, cv01, cv02 y vuelta)
+function cambiarDiseno(i) {
+  const c = doc[i];
+  if (!c) return;
+  const n = numDisenos(c.ch);
+  if (n > 1) c.v = (c.v + 1) % n;
+}
+
+// Dibuja todo el documento: cada letra es un <span> con su color, tamaño y diseño
+function pintarHoja(seguirCursor) {
+  const frag = document.createDocumentFragment();
+
+  doc.forEach((c, i) => {
+    const s = document.createElement('span');
+    s.className = 'l';
+    s.dataset.i = i;
+    s.style.fontSize = c.size + 'px';
+    s.style.color = c.col;
+    // calt desactivado: así la rotación automática de la fuente no pisa lo que has elegido
+    s.style.fontFeatureSettings = c.v ? `"calt" 0, "cv0${c.v}" 1` : '"calt" 0';
+    s.textContent = c.ch === '\n' ? '\u200b' : c.ch;
+    if (c.ch === '\n') s.appendChild(document.createElement('br'));
+    frag.appendChild(s);
+  });
+
+  // marcador invisible al final: da altura a una última línea vacía y sirve de ancla del cursor
+  const fin = document.createElement('span');
+  fin.className = 'fin';
+  fin.dataset.i = doc.length;
+  const ultima = doc[doc.length - 1];
+  fin.style.fontSize = (ultima && ultima.ch !== '\n' ? ultima.size : tamActual()) + 'px';
+  fin.textContent = '\u200b';
+  frag.appendChild(fin);
+
+  texto.replaceChildren(frag);
+
+  cursorEl = document.createElement('div');
+  cursorEl.className = 'cursor';
+  texto.appendChild(cursorEl);
+  colocarCursor();
+  if (seguirCursor) cursorEl.scrollIntoView({ block: 'nearest' });
+}
+
+// pone la línea del cursor junto a la letra correspondiente
+function colocarCursor() {
+  const spans = texto.querySelectorAll('.l');
+  let r, x;
+  if (pos > 0 && doc[pos - 1].ch !== '\n') {
+    r = spans[pos - 1].getBoundingClientRect(); // borde derecho de la letra anterior
+    x = r.right;
+  } else if (pos < doc.length) {
+    r = spans[pos].getBoundingClientRect(); // borde izquierdo de la siguiente
+    x = r.left;
+  } else {
+    r = texto.querySelector('.fin').getBoundingClientRect(); // línea vacía al final
+    x = r.left;
+  }
+  const base = texto.getBoundingClientRect();
+  cursorEl.style.left = x - base.left + 'px';
+  cursorEl.style.top = r.top - base.top + 'px';
+  cursorEl.style.height = r.height + 'px';
+  cursorEl.style.background = selColor.value();
+}
+
+// Agrupa las letras por líneas leyendo dónde las ha puesto el navegador.
+// Una línea nueva empieza tras un salto de línea o cuando la x retrocede (salto automático).
+function medirLineas() {
+  const nodos = texto.querySelectorAll('.l, .fin');
+  const lineas = [];
+  let actual = null;
+  let prevLeft = -Infinity;
+  let nuevaLinea = true;
+
+  nodos.forEach((el) => {
+    const i = +el.dataset.i;
+    const r = el.getBoundingClientRect();
+    const esSalto = i < doc.length && doc[i].ch === '\n';
+    if (nuevaLinea || r.left < prevLeft - 1) {
+      actual = { els: [], top: Infinity, bottom: -Infinity };
+      lineas.push(actual);
+    }
+    actual.els.push({ i, left: r.left, right: r.right, nl: esSalto });
+    actual.top = Math.min(actual.top, r.top);
+    actual.bottom = Math.max(actual.bottom, r.bottom);
+    prevLeft = r.left;
+    nuevaLinea = esSalto;
+  });
+  return lineas;
+}
+
+// posición del cursor más cercana a una x dentro de una línea
+function posEnLinea(linea, x) {
+  for (const e of linea.els) {
+    if ((e.left + e.right) / 2 >= x) return e.i;
+  }
+  const u = linea.els[linea.els.length - 1];
+  return u.nl ? u.i : Math.min(doc.length, u.i + 1);
+}
+
+// posición del cursor para un clic en (x, y) de la pantalla
+function posDesdePunto(x, y) {
+  const lineas = medirLineas();
+  if (!lineas.length) return 0;
+  if (y > lineas[lineas.length - 1].bottom + 4) return doc.length; // clic debajo del texto: al final
+
+  let mejor = lineas[0];
+  let dmin = Infinity;
+  for (const l of lineas) {
+    const d = y < l.top ? l.top - y : y > l.bottom ? y - l.bottom : 0;
+    if (d < dmin) {
+      dmin = d;
+      mejor = l;
+    }
+  }
+  return posEnLinea(mejor, x);
+}
+
+// flechas arriba/abajo e Inicio/Fin
+function moverPorLineas(tecla) {
+  const lineas = medirLineas();
+  if (!lineas.length) return;
+  const r = cursorEl.getBoundingClientRect();
+  const cx = r.left;
+  const cy = (r.top + r.bottom) / 2;
+
+  let L = 0;
+  let dmin = Infinity;
+  lineas.forEach((l, k) => {
+    const d = cy < l.top ? l.top - cy : cy > l.bottom ? cy - l.bottom : 0;
+    if (d < dmin) {
+      dmin = d;
+      L = k;
+    }
+  });
+
+  if (tecla === 'Home') pos = posEnLinea(lineas[L], -Infinity);
+  else if (tecla === 'End') pos = posEnLinea(lineas[L], Infinity);
+  else if (tecla === 'ArrowUp') pos = L > 0 ? posEnLinea(lineas[L - 1], cx) : 0;
+  else pos = L < lineas.length - 1 ? posEnLinea(lineas[L + 1], cx) : doc.length;
+}
+
+// =============== ENTRADA DE TEXTO (Móvil y Ordenador) ===============
+function crearEntradaTexto() {
   entrada = document.createElement('textarea');
   entrada.id = 'entrada';
   entrada.setAttribute('autocomplete', 'off');
@@ -325,43 +389,253 @@ function crearEntradaMovil() {
   entrada.setAttribute('spellcheck', 'false');
   document.body.appendChild(entrada);
 
-  // Cada vez que el teclado cambia el texto, comparamos con lo anterior
-  // y aplicamos la diferencia a nuestro documento (borrar y/o añadir letras)
+  // Escucha los cambios de texto reales que el sistema operativo/navegador procesa (incluye tildes ´ + e = é)
   entrada.addEventListener('input', () => {
-    if (modo !== 'escribir' || !myFont) return;
+    if (modo !== 'escribir') return;
+
     const antes = Array.from(ultimoTexto);
     const ahora = Array.from(entrada.value);
 
     let i = 0;
     while (i < antes.length && i < ahora.length && antes[i] === ahora[i]) i++;
+    let j = 0;
+    while (j < antes.length - i && j < ahora.length - i && antes[antes.length - 1 - j] === ahora[ahora.length - 1 - j])
+      j++;
 
-    for (let k = i; k < antes.length; k++) doc.pop();
-    for (let k = i; k < ahora.length; k++) doc.push(nuevo(ahora[k]));
+    doc.splice(i, antes.length - i - j); // Borra las letras eliminadas
+    pos = i;
+    for (let k = i; k < ahora.length - j; k++) anadir(ahora[k]); // Añade los nuevos caracteres compuestos
 
-    ultimoTexto = entrada.value;
-    editado();
-  });
-
-  // Tocar el lienzo (sin arrastrar) en modo escribir abre el teclado
-  const lienzo = document.querySelector('canvas');
-  lienzo.addEventListener('pointerdown', (e) => {
-    toqueInicio = { x: e.clientX, y: e.clientY };
-  });
-  lienzo.addEventListener('pointerup', (e) => {
-    if (!esMovil || modo !== 'escribir' || !toqueInicio) return;
-    const movido = Math.hypot(e.clientX - toqueInicio.x, e.clientY - toqueInicio.y);
-    if (movido < 10) enfocarTeclado();
+    sincronizarEntrada();
+    pintarHoja(true);
   });
 }
 
 function enfocarTeclado() {
   if (!entrada) return;
-  if (document.activeElement !== entrada) {
-    // el textarea refleja el texto actual, para que "borrar" del teclado funcione
-    entrada.value = doc.map((c) => c.ch).join('');
-    ultimoTexto = entrada.value;
-  }
   entrada.focus({ preventScroll: true });
+  sincronizarEntrada();
+}
+
+// =============== GESTIÓN DE LA HOJA Y EVENTOS ===============
+function crearHoja() {
+  hoja = document.getElementById('hoja');
+  texto = document.getElementById('texto');
+
+  // Al hacer clic en cualquier parte de la hoja o sobre una letra
+  hoja.addEventListener('click', (e) => {
+    pos = posDesdePunto(e.clientX, e.clientY);
+
+    // Si se hace clic directamente en una letra con diseño alternativo, cambia su variante
+    const s = e.target.closest('.l');
+    if (s) {
+      const idx = +s.dataset.i;
+      if (numDisenos(doc[idx].ch) > 1) {
+        cambiarDiseno(idx);
+      }
+    }
+
+    pintarHoja(false);
+
+    // Enfoca el textarea en MÓVIL Y ORDENADOR para mantener activo el motor de composición de tildes
+    const a = document.activeElement;
+    if (!a || !a.closest('#panel')) {
+      enfocarTeclado();
+    }
+  });
+
+  // Evitar desenfocar el textarea al hacer clic secundario o arrastrar
+  hoja.addEventListener('mousedown', (e) => {
+    const a = document.activeElement;
+    if (!a || !a.closest('#panel')) {
+      e.preventDefault();
+      enfocarTeclado();
+    }
+  });
+
+  // Captura de teclas de navegación y borrado (las letras y tildes van por el 'input' del textarea)
+  document.addEventListener('keydown', (e) => {
+    if (modo !== 'escribir') return;
+    const a = document.activeElement;
+    if (a && a.closest && a.closest('#panel')) return; // Escribiendo en el modal de descarga
+
+    // Si el textarea pierde el foco, se reenfoca automáticamente
+    if (document.activeElement !== entrada) {
+      enfocarTeclado();
+    }
+
+    // Tecla Tab para cambiar variante de la letra anterior al cursor
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      cambiarDiseno(pos - 1);
+      pintarHoja(false);
+      return;
+    }
+
+    // Mover cursor con las flechas, Home, End
+    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) {
+      setTimeout(() => {
+        if (entrada) {
+          const desplazamiento = doc.slice(0, pos).reduce((n, c) => n + c.ch.length, 0);
+          entrada.setSelectionRange(desplazamiento, desplazamiento);
+        }
+        pintarHoja(true);
+      }, 0);
+    }
+  });
+
+  pintarHoja(false);
+  document.fonts.ready.then(() => pintarHoja(false));
+}
+// =============== ENTRADA DE TEXTO Y TECLADO ===============
+function sincronizarEntrada() {
+  if (!entrada) return;
+  entrada.value = doc.map((c) => c.ch).join('');
+  ultimoTexto = entrada.value;
+  const desplazamiento = doc.slice(0, pos).reduce((n, c) => n + c.ch.length, 0);
+  entrada.setSelectionRange(desplazamiento, desplazamiento);
+}
+
+function enfocarTeclado() {
+  if (!entrada) return;
+  entrada.focus({ preventScroll: true });
+  sincronizarEntrada();
+}
+
+function crearEntradaTexto() {
+  entrada = document.createElement('textarea');
+  entrada.id = 'entrada';
+  entrada.setAttribute('autocomplete', 'off');
+  entrada.setAttribute('autocorrect', 'off');
+  entrada.setAttribute('autocapitalize', 'off');
+  entrada.setAttribute('spellcheck', 'false');
+  document.body.appendChild(entrada);
+
+  // Escucha cambios nativos (incluye tildes ´ + e = é, acentos y ñ)
+  entrada.addEventListener('input', () => {
+    if (modo !== 'escribir') return;
+
+    const antes = Array.from(ultimoTexto);
+    const ahora = Array.from(entrada.value);
+
+    let i = 0;
+    while (i < antes.length && i < ahora.length && antes[i] === ahora[i]) i++;
+    let j = 0;
+    while (j < antes.length - i && j < ahora.length - i && antes[antes.length - 1 - j] === ahora[ahora.length - 1 - j])
+      j++;
+
+    doc.splice(i, antes.length - i - j); // Elimina letras borradas
+    pos = i;
+    for (let k = i; k < ahora.length - j; k++) anadir(ahora[k]); // Añade las nuevas (incluye vocales con tilde)
+
+    sincronizarEntrada();
+    pintarHoja(true);
+  });
+}
+
+// =============== GESTIÓN DE LA HOJA Y EVENTOS ===============
+function crearHoja() {
+  hoja = document.getElementById('hoja');
+  texto = document.getElementById('texto');
+
+  // Clic sobre el texto o una letra
+  hoja.addEventListener('click', (e) => {
+    pos = posDesdePunto(e.clientX, e.clientY);
+
+    // Si se pulsa sobre una letra con variante, cambia su diseño
+    const s = e.target.closest('.l');
+    if (s) {
+      const idx = +s.dataset.i;
+      if (numDisenos(doc[idx].ch) > 1) {
+        cambiarDiseno(idx);
+      }
+    }
+
+    pintarHoja(false);
+
+    // Mantiene el foco en la entrada de texto
+    const a = document.activeElement;
+    if (!a || !a.closest('#panel')) {
+      enfocarTeclado();
+    }
+  });
+
+  // Evita que al arrastrar o pulsar se pierda el foco
+  hoja.addEventListener('mousedown', (e) => {
+    const a = document.activeElement;
+    if (!a || !a.closest('#panel')) {
+      e.preventDefault();
+      enfocarTeclado();
+    }
+  });
+
+  // Teclas de navegación y atajos
+  document.addEventListener('keydown', (e) => {
+    if (modo !== 'escribir') return;
+    const a = document.activeElement;
+    if (a && a.closest && a.closest('#panel')) return;
+
+    if (document.activeElement !== entrada) {
+      enfocarTeclado();
+    }
+
+    // Tabulador para cambiar variante de la letra previa al cursor
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      cambiarDiseno(pos - 1);
+      pintarHoja(false);
+      return;
+    }
+
+    // Navegación vertical (Arriba / Abajo) e Inicio / Fin
+    if (['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) {
+      e.preventDefault();
+      moverPorLineas(e.key);
+      sincronizarEntrada();
+      pintarHoja(true);
+      return;
+    }
+
+    // Navegación horizontal (Izquierda / Derecha)
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      setTimeout(() => {
+        if (entrada) {
+          // Calcula la nueva posición del cursor (pos) según donde la ha movido el textarea
+          const selStart = entrada.selectionStart;
+          let recuento = 0;
+          let nuevaPos = 0;
+
+          for (let i = 0; i < doc.length; i++) {
+            if (recuento >= selStart) break;
+            recuento += doc[i].ch.length;
+            nuevaPos = i + 1;
+          }
+
+          pos = nuevaPos;
+          pintarHoja(true);
+        }
+      }, 0);
+    }
+  });
+
+  pintarHoja(false);
+  document.fonts.ready.then(() => pintarHoja(false));
+}
+// Guarda la hoja entera (no solo lo visible) como PNG
+async function guardarTexto() {
+  texto.classList.add('capturando'); // oculta el cursor
+  try {
+    await document.fonts.ready;
+    // pixelRatio 2 = más nitidez; si el documento es larguísimo, bájalo a 1
+    const url = await htmlToImage.toPng(texto, { backgroundColor: '#f5f5f5', pixelRatio: 2, cacheBust: true });
+    const a = document.createElement('a');
+    a.download = 'tipografia-escribir.png';
+    a.href = url;
+    a.click();
+  } catch (err) {
+    console.error(err);
+  }
+  texto.classList.remove('capturando');
 }
 
 // =============== INTERFAZ ===============
@@ -386,25 +660,30 @@ function crearInterfaz() {
   btnBorrar = createButton('borrar').id('borrar').parent(barraEl);
   btnDescargar = createButton('descargar').id('descargar').parent(barraEl);
   createDiv().class('salto').parent(barraEl); // fuerza el salto de línea en móvil
+
   btnSellos.mousePressed(() => cambiarModo('sellos'));
   btnEscribir.mousePressed(() => cambiarModo('escribir'));
   btnDescargar.mousePressed(abrirPanel);
   btnGuardar.mousePressed(() => {
-    guardando = true;
     soltarFoco();
+    if (modo === 'sellos') guardando = true;
+    else guardarTexto();
   });
   btnBorrar.mousePressed(borrar);
 
+  // el tamaño y el color solo afectan a lo que escribas a partir de ahora
   selTam.input(() => {
     etiquetaTam.html('tamaño ' + selTam.value());
-    layoutSucio = true;
+    pintarHoja(false);
   });
+  selColor.elt.addEventListener('input', () => pintarHoja(false));
 
   // que los controles no se queden con el foco y se activen al teclear
   selColor.elt.addEventListener('change', soltarFoco);
   selTam.elt.addEventListener('change', soltarFoco);
 
-  crearEntradaMovil();
+  crearEntradaTexto(); // En lugar de crearEntradaMovil()
+  crearHoja();
   crearPanel();
   actualizarInterfaz();
 }
@@ -413,15 +692,14 @@ function crearInterfaz() {
 function medirBarra() {
   if (!barraEl) return;
   BARRA = barraEl.elt.offsetHeight;
-  layoutSucio = true;
+  if (hoja) hoja.style.top = BARRA + 'px';
 }
-
 function cambiarModo(m) {
   modo = m;
-  layoutSucio = true;
   soltarFoco();
   actualizarInterfaz();
   medirBarra();
+  if (m === 'escribir') pintarHoja(false);
 }
 
 function actualizarInterfaz() {
@@ -430,12 +708,13 @@ function actualizarInterfaz() {
   btnEscribir.removeClass('activa');
   (esc ? btnEscribir : btnSellos).addClass('activa');
   grupoTam.style('display', esc ? 'flex' : 'none');
+  if (hoja) hoja.style.display = esc ? 'block' : 'none';
 }
 
 function guardarImagen() {
-  // captura solo el lienzo visible, sin la barra
+  // captura solo el lienzo visible, sin la barra (modo sellos)
   const img = get(0, BARRA, width, height - BARRA);
-  save(img, 'tipografia-' + modo + '.png');
+  save(img, 'tipografia-sellos.png');
   guardando = false;
 }
 
@@ -444,12 +723,10 @@ function borrar() {
     sellos = [];
   } else {
     doc = [];
-    scrollY = 0;
-    if (entrada) {
-      entrada.value = '';
-      ultimoTexto = '';
-    }
-    editado();
+    pos = 0;
+    if (entrada) sincronizarEntrada();
+    hoja.scrollTop = 0;
+    pintarHoja(false);
   }
   soltarFoco();
 }
@@ -461,7 +738,7 @@ function soltarFoco() {
 function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
   medirBarra();
-  if (myFont) editado(); // reajusta texto y scroll al nuevo tamaño
+  if (modo === 'escribir') pintarHoja(false);
 }
 
 // =============== PANEL DE DESCARGA ===============
