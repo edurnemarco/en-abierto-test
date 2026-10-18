@@ -14,7 +14,7 @@ const CARACTERES = Array.from(
     'abcdefghijklmnñopqrstuvwxyz' +
     'ÁÉÍÓÚÜáéíóúü' +
     '0123456789' +
-    `.,;:!?¡¿"'“”()-–—…«»@*<>♥`,
+    `.,;:!?¡¿"'“”()-–—«»@*<>♥`,
 );
 let sellos = [];
 
