@@ -59,6 +59,11 @@ canvas { display: block; touch-action: none; }
   font: inherit; color: inherit; cursor: pointer;
 }
 #barra button:hover { border-bottom-color: #aaa; }
+#barra a.proceso {
+  color: inherit; text-decoration: none; padding: 4px 0;
+  border-bottom: 2px solid transparent;
+}
+#barra a.proceso:hover { border-bottom-color: #aaa; }
 #barra button.activa { border-bottom-color: #0a0a0a; }
 #barra input[type=color] {
   -webkit-appearance: none; appearance: none;
@@ -76,15 +81,17 @@ canvas { display: block; touch-action: none; }
 /* Pantallas táctiles: controles más grandes y fáciles de pulsar */
 @media (pointer: coarse), (max-width: 600px) {
   #barra { font-size: 15px; gap: 6px 18px; padding: 6px 12px; }
-  #barra button { padding: 10px 2px; }
+  #barra button, #barra a.proceso { padding: 10px 2px; }
   #barra input[type=color] { width: 56px; height: 36px; }
   #barra input[type=range] { width: 120px; }
 
-  /* primera línea: sellos, escribir, color y descargar a la derecha */
-  #barra #descargar { margin-left: auto; }
-  /* segunda línea en adelante: tamaño, guardar y borrar */
-  #barra .salto { display: block; flex-basis: 100%; height: 0; order: 1; }
-  #barra .grupo, #barra #guardar, #barra #borrar { order: 2; }
+  /* primera línea: sellos, escribir, color y proceso a la derecha */
+  #barra a.proceso { order: 1; margin-left: auto; }
+  #barra .salto { display: block; flex-basis: 100%; height: 0; order: 2; }
+
+  /* segunda línea: descargar a la izquierda, luego tamaño, guardar y borrar */
+  #barra #descargar { order: 3; }
+  #barra .grupo, #barra #guardar, #barra #borrar { order: 4; }
 }
 
 /* Hoja de escribir: capa HTML con scroll propio, encima del canvas y debajo de la barra */
@@ -646,6 +653,10 @@ function crearInterfaz() {
 
   barraEl = createDiv();
   barraEl.id('barra');
+  // enlace al proceso: el primero de la barra (en móvil el CSS lo lleva a la derecha de la 1ª línea)
+  const enlaceProceso = createA('https://tipografia-en-abierto.netlify.app/', 'proceso', '_blank');
+  enlaceProceso.class('proceso').parent(barraEl);
+  enlaceProceso.attribute('rel', 'noopener');
 
   btnSellos = createButton('sellos').parent(barraEl);
   btnEscribir = createButton('escribir').parent(barraEl);
