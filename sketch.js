@@ -29,7 +29,7 @@ let hoja, texto, cursorEl;
 
 // Letras que tienen diseños alternativos. ACTUALÍZALO cuando añadas variantes.
 const TRES_DISENOS = 'GHk'; // base + cv01 + cv02
-const DOS_DISENOS = 'AÁÂÄÀEÉÊËÈFIÍÎÏÌJKLMNRSTXYÝŶŸỲcmñoóôöòwẃŵẅẁyýŷÿỳ♥áéíóúÁÉÍÓÚ';
+const DOS_DISENOS = 'AÁÂÄÀEÉÊËÈFIÍÎÏÌJKLMNRSTXYÝŶŸỲZcmñoóôöòwẃŵẅẁyýŷÿỳ♥áéíóúÁÉÍÓÚ';
 
 // ---------- Teclado del móvil ----------
 let entrada; // textarea invisible que hace aparecer el teclado
