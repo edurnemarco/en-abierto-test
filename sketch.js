@@ -143,6 +143,7 @@ canvas { display: block; touch-action: none; }
   font: inherit; text-align: center; text-decoration: none; cursor: pointer;
 }
 #panel .boton:focus-visible { background: #0a0a0a; color: #fff; }
+#panel a.enlace { text-decoration: none; }
 
 @media (hover: hover) {
   #panel .boton:hover { background: #0a0a0a; color: #fff; }
@@ -768,6 +769,8 @@ function crearPanel() {
     <button type="button" id="panel-copiar" class="enlace">copiar enlace</button>
     <p id="panel-msg"></p>
    <button type="button" id="panel-jugar" class="enlace">probar la tipografía →</button>
+   <a class="enlace" href="https://tipografia-en-abierto.netlify.app/" target="_blank" rel="noopener">conoce el proceso →</a>
+
   `;
   document.body.appendChild(panel);
 
